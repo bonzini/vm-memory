@@ -406,6 +406,8 @@ impl<'a> VolatileSlice<'a> {
         from_raw_parts(self.addr, self.size)
     }
 
+    // safe because it's expected interior mutability
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_mut_slice(&self) -> &mut [u8] {
         from_raw_parts_mut(self.addr, self.size)
     }
@@ -631,6 +633,7 @@ where
     phantom: PhantomData<&'a T>,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl<'a, T: DataInit> VolatileRef<'a, T> {
     /// Creates a reference to raw memory that must support volatile access of `T` sized chunks.
     ///
