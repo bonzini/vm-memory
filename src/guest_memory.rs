@@ -12,7 +12,7 @@
 //!
 //! To make the abstraction as generic as possible, all the core traits only define methods to
 //! access the address space are defined here, and they never define methods to manage (create,
-//! delete, insert, remove etc) address spaces.  By this way, the address space consumers
+//! delete, insert, remove etc) address spaces. By this way, the address space consumers
 //! (virtio device drivers, vhost drivers and boot loaders etc) may be decoupled from the address
 //! space provider (typically a hypervisor).
 //!
@@ -100,7 +100,8 @@ impl Display for Error {
 ///
 /// Notes:
 /// - On ARM64, a 32-bit hypervisor may be used to support a 64-bit guest. For simplicity,
-/// u64 is used to store the the raw value no matter the guest a 32-bit or 64-bit virtual machine.
+/// u64 is used to store the the raw value no matter if the guest a 32-bit or 64-bit virtual
+/// machine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct GuestAddress(pub u64);
 impl_address_ops!(GuestAddress, u64);
