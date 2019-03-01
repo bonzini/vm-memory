@@ -4,8 +4,8 @@ version = "0.1.0"
 authors = ["Liu Jiang <gerry@linux.alibaba.com>"]
 
 [features]
-default = ["vm-memory-backend-mmap"]
-vm-memory-backend-mmap = []
+default = []
+backend-mmap = []
 
 [dependencies]
 libc = ">=0.2.39"
