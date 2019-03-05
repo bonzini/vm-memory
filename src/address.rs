@@ -57,7 +57,7 @@ pub trait Address:
     + BitOr<<Self as AddressValue>::V, Output = Self>
 {
     /// Create an address from a raw address value.
-    fn new(Self::V) -> Self;
+    fn new(addr: Self::V) -> Self;
 
     /// Get the raw value of an address.
     fn raw_value(&self) -> Self::V;
