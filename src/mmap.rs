@@ -22,6 +22,7 @@
 
 use libc;
 use std::io::{self, Read, Write};
+use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::ptr::null_mut;
 use std::sync::Arc;
@@ -180,8 +181,28 @@ impl GuestRegionMmap {
         }
     }
 
-    fn as_volatile_slice(&self) -> VolatileSlice {
-        self.mapping.as_volatile_slice()
+    /// Returns a pointer to the beginning of the memory region.  Should only be
+    /// used for passing this region to ioctls for setting guest memory.
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.mapping.as_ptr()
+    }
+
+    /// Convert an absolute address into an address space (GuestMemory)
+    /// to a host pointer, or return None if it is out of bounds.
+    pub fn get_host_address(&self, addr: MemoryRegionAddress) -> Option<*mut u8> {
+        if addr.raw_value() < self.len() {
+            unsafe { Some(self.mapping.as_ptr().offset(addr.raw_value() as isize)) }
+        } else {
+            None
+        }
+    }
+}
+
+impl Deref for GuestRegionMmap {
+    type Target = MmapRegion;
+
+    fn deref(&self) -> &MmapRegion {
+        &self.mapping
     }
 }
 
@@ -395,6 +416,13 @@ impl GuestMemoryMmap {
             regions: Arc::new(regions),
         })
     }
+
+    /// Convert an absolute address into an address space (GuestMemory)
+    /// to a host pointer, or return None if it is out of bounds.
+    pub fn get_host_address(&self, addr: GuestAddress) -> Option<*mut u8> {
+        self.to_region_addr(addr)
+            .and_then(|(r, addr)| r.get_host_address(addr))
+    }
 }
 
 impl GuestMemory for GuestMemoryMmap {
@@ -413,9 +441,9 @@ impl GuestMemory for GuestMemoryMmap {
         None
     }
 
-    fn with_regions<F>(&self, cb: F) -> Result<()>
+    fn with_regions<F, E>(&self, cb: F) -> std::result::Result<(), E>
     where
-        F: Fn(usize, &GuestRegionMmap) -> Result<()>,
+        F: Fn(usize, &Self::R) -> std::result::Result<(), E>,
     {
         for (index, region) in self.regions.iter().enumerate() {
             cb(index, region)?;
@@ -423,14 +451,22 @@ impl GuestMemory for GuestMemoryMmap {
         Ok(())
     }
 
-    fn with_regions_mut<F>(&self, mut cb: F) -> Result<()>
+    fn with_regions_mut<F, E>(&self, mut cb: F) -> std::result::Result<(), E>
     where
-        F: FnMut(usize, &GuestRegionMmap) -> Result<()>,
+        F: FnMut(usize, &Self::R) -> std::result::Result<(), E>,
     {
         for (index, region) in self.regions.iter().enumerate() {
             cb(index, region)?;
         }
         Ok(())
+    }
+
+    fn map_and_fold<F, G, T>(&self, init: T, mapf: F, foldf: G) -> T
+    where
+        F: Fn((usize, &Self::R)) -> T,
+        G: Fn(T, T) -> T,
+    {
+        self.regions.iter().enumerate().map(mapf).fold(init, foldf)
     }
 }
 
@@ -501,10 +537,88 @@ mod tests {
         let guest_mem =
             GuestMemoryMmap::new(&[(start_addr1, 0x400), (start_addr2, 0x400)]).unwrap();
         assert_eq!(guest_mem.num_regions(), 2);
+        assert_eq!(guest_mem.end_addr(), GuestAddress(0xbff));
         assert!(guest_mem.find_region(GuestAddress(0x200)).is_some());
         assert!(guest_mem.find_region(GuestAddress(0x600)).is_none());
         assert!(guest_mem.find_region(GuestAddress(0xa00)).is_some());
         assert!(guest_mem.find_region(GuestAddress(0xc00)).is_none());
+    }
+
+    #[test]
+    fn test_address_in_range() {
+        let start_addr1 = GuestAddress(0x0);
+        let start_addr2 = GuestAddress(0x800);
+        let guest_mem =
+            GuestMemoryMmap::new(&[(start_addr1, 0x400), (start_addr2, 0x400)]).unwrap();
+        assert!(guest_mem.address_in_range(GuestAddress(0x200)));
+        assert!(!guest_mem.address_in_range(GuestAddress(0x600)));
+        assert!(guest_mem.address_in_range(GuestAddress(0xa00)));
+        assert!(!guest_mem.address_in_range(GuestAddress(0xc00)));
+    }
+
+    #[test]
+    fn test_check_address() {
+        let start_addr1 = GuestAddress(0x0);
+        let start_addr2 = GuestAddress(0x800);
+        let guest_mem =
+            GuestMemoryMmap::new(&[(start_addr1, 0x400), (start_addr2, 0x400)]).unwrap();
+        assert_eq!(
+            guest_mem.check_address(GuestAddress(0x200)),
+            Some(GuestAddress(0x200))
+        );
+        assert_eq!(guest_mem.check_address(GuestAddress(0x600)), None);
+        assert_eq!(
+            guest_mem.check_address(GuestAddress(0xa00)),
+            Some(GuestAddress(0xa00))
+        );
+        assert_eq!(guest_mem.check_address(GuestAddress(0xc00)), None);
+    }
+
+    #[test]
+    fn test_to_region_addr() {
+        let start_addr1 = GuestAddress(0x0);
+        let start_addr2 = GuestAddress(0x800);
+        let guest_mem =
+            GuestMemoryMmap::new(&[(start_addr1, 0x400), (start_addr2, 0x400)]).unwrap();
+        assert!(guest_mem.to_region_addr(GuestAddress(0x600)).is_none());
+        let (r0, addr0) = guest_mem.to_region_addr(GuestAddress(0x800)).unwrap();
+        let (r1, addr1) = guest_mem.to_region_addr(GuestAddress(0xa00)).unwrap();
+        assert!(r0.as_ptr() == r1.as_ptr());
+        assert_eq!(addr0, MemoryRegionAddress(0));
+        assert_eq!(addr1, MemoryRegionAddress(0x200));
+    }
+
+    #[test]
+    fn test_get_host_address() {
+        let start_addr1 = GuestAddress(0x0);
+        let start_addr2 = GuestAddress(0x800);
+        let guest_mem =
+            GuestMemoryMmap::new(&[(start_addr1, 0x400), (start_addr2, 0x400)]).unwrap();
+        assert!(guest_mem.get_host_address(GuestAddress(0x600)).is_none());
+        let ptr0 = guest_mem.get_host_address(GuestAddress(0x800)).unwrap();
+        let ptr1 = guest_mem.get_host_address(GuestAddress(0xa00)).unwrap();
+        assert_eq!(
+            ptr0,
+            guest_mem.find_region(GuestAddress(0x800)).unwrap().as_ptr()
+        );
+        assert_eq!(unsafe { ptr0.offset(0x200) }, ptr1);
+    }
+
+    #[test]
+    fn test_deref() {
+        let start_addr = GuestAddress(0x0);
+        let guest_mem = GuestMemoryMmap::new(&[(start_addr, 0x400)]).unwrap();
+        let sample_buf = &[1, 2, 3, 4, 5];
+
+        assert_eq!(guest_mem.write(sample_buf, start_addr).unwrap(), 5);
+        let slice = guest_mem
+            .find_region(GuestAddress(0))
+            .unwrap()
+            .as_volatile_slice();
+
+        let buf = &mut [0, 0, 0, 0, 0];
+        assert_eq!(slice.read(buf, 0).unwrap(), 5);
+        assert_eq!(buf, sample_buf);
     }
 
     #[test]
