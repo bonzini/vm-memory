@@ -166,6 +166,7 @@ impl Drop for MmapRegion {
 
 /// Tracks a mapping of memory in the current process and the corresponding base address
 /// in the guest's memory space.
+#[derive(Debug)]
 pub struct GuestRegionMmap {
     mapping: MmapRegion,
     guest_base: GuestAddress,
@@ -380,7 +381,7 @@ impl GuestMemoryRegion for GuestRegionMmap {
 }
 
 /// Tracks memory regions allocated/mapped for the guest in the current process.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GuestMemoryMmap {
     regions: Arc<Vec<GuestRegionMmap>>,
 }
@@ -414,6 +415,29 @@ impl GuestMemoryMmap {
 
         Ok(Self {
             regions: Arc::new(regions),
+        })
+    }
+
+    /// Creates a container and adds an existing set of mappings to it.
+    pub fn from_regions(ranges: Vec<GuestRegionMmap>) -> std::result::Result<Self, MmapError> {
+        if ranges.is_empty() {
+            return Err(MmapError::NoMemoryRegion);
+        }
+
+        for rangei in 1..ranges.len() {
+            let range = &ranges[rangei];
+            let last = &ranges[rangei - 1];
+            if last
+                .guest_base
+                .checked_add(last.mapping.len() as GuestUsize)
+                .map_or(true, |a| a > range.min_addr())
+            {
+                return Err(MmapError::MemoryRegionOverlap);
+            }
+        }
+
+        Ok(Self {
+            regions: Arc::new(ranges),
         })
     }
 
@@ -619,6 +643,22 @@ mod tests {
         let buf = &mut [0, 0, 0, 0, 0];
         assert_eq!(slice.read(buf, 0).unwrap(), 5);
         assert_eq!(buf, sample_buf);
+    }
+  
+    #[test]
+    fn mapped_file_regions() {
+        let mut f = tempfile().unwrap();
+        let empty_buf = &[0; 16384];
+        assert!(f.write_all(empty_buf).is_ok());
+
+        let mem_map = MmapRegion::from_fd(&f, empty_buf.len(), 0).unwrap();
+        let guest_reg = GuestRegionMmap::new(mem_map, GuestAddress(0x8000));
+        let mut region_vec = Vec::new();
+        region_vec.push(guest_reg);
+        let guest_mem = GuestMemoryMmap::from_regions(region_vec).unwrap();
+        assert_eq!(guest_mem.num_regions(), 1);
+        assert!(guest_mem.find_region(GuestAddress(0)).is_none());
+        assert!(guest_mem.find_region(GuestAddress(0x8000)).is_some());
     }
 
     #[test]
