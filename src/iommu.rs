@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 /// Errors associated with IOMMU address translation.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Lookup cannot be resolved.
     #[error(

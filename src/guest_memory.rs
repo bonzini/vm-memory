@@ -63,6 +63,7 @@ use crate::GuestMemoryRegion;
 /// Errors associated with handling guest memory accesses.
 #[allow(missing_docs)]
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Failure in finding a guest address in any memory regions mapped by this guest.
     #[error("Guest memory error: invalid guest address {}",.0.raw_value())]
